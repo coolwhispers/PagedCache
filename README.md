@@ -18,7 +18,7 @@ var result = models.ExecuteCache<ResultModel>(pageSize);
 
 ```
 
-Sql Sample:
+DB Connection Sample:
 ```cs
 using PagedCache;
 
