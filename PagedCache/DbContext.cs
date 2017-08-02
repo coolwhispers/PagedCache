@@ -10,10 +10,12 @@ namespace PagedCache
 {
     internal class DbContext
     {
-        private static Stream stream = new MemoryStream();
-        private static LiteDB.LiteDatabase db = new LiteDB.LiteDatabase(stream);
+        private static readonly Stream DbStream = new MemoryStream();
+        private static readonly LiteDB.LiteDatabase Db = new LiteDB.LiteDatabase(DbStream);
 
-        private static string PageInfoTable = "_PagedCache";
+        private static readonly string PageInfoTable = "_PagedCache";
+
+        private static readonly string ExpiredTimeTable = "_ExpiredTime";
 
         private static string GetTableName(Guid id, int page)
         {
@@ -31,7 +33,7 @@ namespace PagedCache
         {
             var tableName = GetTableName(id, page);
 
-            var table = db.GetCollection<T>(tableName);
+            var table = Db.GetCollection<T>(tableName);
 
             table.Insert(models);
 
@@ -40,14 +42,14 @@ namespace PagedCache
 
         public static IEnumerable<T> Get<T>(Guid id, int page)
         {
-            var table = db.GetCollection<T>(GetTableName(id, page));
+            var table = Db.GetCollection<T>(GetTableName(id, page));
 
             return table.FindAll();
         }
 
         public static void AddOrUpdateCacheInfo(CacheInfo model)
         {
-            var table = db.GetCollection<CacheInfo>(PageInfoTable);
+            var table = Db.GetCollection<CacheInfo>(PageInfoTable);
 
             table.Upsert(model);
 
@@ -56,31 +58,63 @@ namespace PagedCache
 
         public static CacheInfo GetCacheInfo(Guid id)
         {
-            var table = db.GetCollection<CacheInfo>(PageInfoTable);
+            var table = Db.GetCollection<CacheInfo>(PageInfoTable);
 
             return table.Find(x => x.Id == id).FirstOrDefault();
         }
 
-        public static void DropTable(Guid id, int page)
+        public static DateTime GetExpiredTime(Guid id)
         {
-            var tableName = GetTableName(id, page);
+            var table = Db.GetCollection<CacheExpiredTime>(ExpiredTimeTable);
 
-            if (db.CollectionExists(tableName))
+            return table.Find(x => x.Id == id).Select(x => x.ExpiredTime).FirstOrDefault();
+        }
+
+        public static void UpdateExpiredTime(CacheExpiredTime model)
+        {
+            var table = Db.GetCollection<CacheExpiredTime>(ExpiredTimeTable);
+
+            table.Upsert(model);
+        }
+
+        public static void DropCache(CacheInfo cacheInfo)
+        {
+            for (var page = 1; page <= cacheInfo.TotalPageCount; page++)
             {
-                db.DropCollection(tableName);
+                var tableName = GetTableName(cacheInfo.Id, page);
+
+                if (Db.CollectionExists(tableName))
+                {
+                    Db.DropCollection(tableName);
+                }
+            }
+
+            if (Db.CollectionExists(PageInfoTable))
+            {
+                Db.DropCollection(PageInfoTable);
+            }
+
+            if (Db.CollectionExists(ExpiredTimeTable))
+            {
+                Db.DropCollection(ExpiredTimeTable);
             }
         }
+        
 
         public static IEnumerable<CacheInfo> GetExpiredCache()
         {
-            var collection = db.GetCollection<CacheInfo>(PageInfoTable);
+            var table = Db.GetCollection<CacheExpiredTime>(ExpiredTimeTable);
 
-            return collection.Find(x => x.ExpiredTime < DateTime.Now);
+            var expiredIds = table.Find(x => x.ExpiredTime < DateTime.Now).Select(x => x.Id);
+
+            var collection = Db.GetCollection<CacheInfo>(ExpiredTimeTable);
+
+            return collection.Find(x => expiredIds.Contains(x.Id));
         }
 
         public static DateTime GetMinExpiredCache()
         {
-            var collection = db.GetCollection<CacheInfo>(PageInfoTable);
+            var collection = Db.GetCollection<CacheExpiredTime>(ExpiredTimeTable);
 
             return collection.Min(x => x.ExpiredTime);
         }
@@ -88,25 +122,17 @@ namespace PagedCache
     }
     internal class ClearCache
     {
-        private static ClearCache ins;
-        private static Thread thread;
-        private static object lockObj = new object();
-
-        private ClearCache()
-        {
-        }
-
-        private void Execute()
+        private static Thread _thread;
+        private static readonly object LockObj = new object();
+        
+        private static void Execute()
         {
             while (true)
             {
                 var cacheInfos = DbContext.GetExpiredCache();
                 foreach (var cacheInfo in cacheInfos)
                 {
-                    foreach (var page in cacheInfo.Pages)
-                    {
-                        DbContext.DropTable(cacheInfo.Id, page.PageNumber);
-                    }
+                    DbContext.DropCache(cacheInfo);
                 }
 
                 var nextTime = DbContext.GetMinExpiredCache();
@@ -122,25 +148,14 @@ namespace PagedCache
 
         public static void Run()
         {
-            if (ins == null)
+            if (_thread == null || _thread.ThreadState != ThreadState.Running)
             {
-                lock (lockObj)
+                lock (LockObj)
                 {
-                    if (ins == null)
+                    if (_thread == null || _thread.ThreadState != ThreadState.Running)
                     {
-                        ins = new ClearCache();
-                    }
-                }
-            }
-
-            if (thread == null || thread.ThreadState != ThreadState.Running)
-            {
-                lock (lockObj)
-                {
-                    if (thread == null || thread.ThreadState != ThreadState.Running)
-                    {
-                        thread = new Thread(ins.Execute);
-                        thread.Start();
+                        _thread = new Thread(Execute);
+                        _thread.Start();
                     }
                 }
             }

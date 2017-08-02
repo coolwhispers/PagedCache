@@ -58,11 +58,13 @@
     <Compile Include="PagedCache.cs" />
     <Compile Include="PagedCacheConfig.cs" />
     <Compile Include="PagedCacheResult.cs" />
+    <Compile Include="PagedThread.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="TryLite.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="PagedCache.nuspec" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 

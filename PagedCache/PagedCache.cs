@@ -1,16 +1,34 @@
 ﻿using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
-using System.IO;
 using System.Linq;
-using System.Text;
-using System.Threading;
 
 namespace PagedCache
 {
     public static class PagedCache
     {
+        /// <summary>
+        /// Get cache id
+        /// </summary>
+        /// <param name="token">The token.</param>
+        /// <returns></returns>
+        public static Guid GetCacheId(string token)
+        {
+            var cache = Helper.DecodeToken(token);
+
+            return cache.Id;
+        }
+
+        /// <summary>
+        /// Execute Cache
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="connection">The connection.</param>
+        /// <param name="pageSize">Size of the page.</param>
+        /// <param name="sqlCommandString">The SQL command string.</param>
+        /// <param name="parameters">The parameters.</param>
+        /// <param name="commandTimeout">The command timeout.</param>
+        /// <returns></returns>
         public static PagedCacheResult<T> ExecuteCache<T>(this IDbConnection connection, int pageSize, string sqlCommandString, IDbDataParameter[] parameters = null, int commandTimeout = 300) where T : new()
         {
             var cacheThread = new CacheThread();
@@ -19,182 +37,235 @@ namespace PagedCache
 
             cacheThread.WaitFristPaged();
 
-            threads.TryAdd(cacheThread.Id, cacheThread);
+            PagedThread.Add(cacheThread);
 
             return Next<T>(Helper.EncodeToken(cacheThread.Id, 1));
         }
 
+        /// <summary>
+        /// Execute Cache
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="models">The models.</param>
+        /// <param name="pageSize">Size of the page.</param>
+        /// <returns></returns>
         public static PagedCacheResult<T> ExecuteCache<T>(this IEnumerable<T> models, int pageSize) where T : new()
         {
-            foreach (var item in models.ToPaged(pageSize))
-            {
+            var process = new CacheProcess(pageSize);
 
-            }
+            process.ExecuteForList(models);
 
-            return null;
+            return Next<T>(Helper.EncodeToken(process.Id, 1));
         }
 
+        /// <summary>
+        /// Get next page by token
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="token">The token.</param>
+        /// <returns></returns>
         public static PagedCacheResult<T> Next<T>(string token) where T : new()
         {
             var cacheToken = Helper.DecodeToken(token);
 
-            return CacheProcess.NextPage<T>(cacheToken);
+            return Next<T>(cacheToken);
         }
 
-        private static ConcurrentDictionary<Guid, CacheThread> threads = new ConcurrentDictionary<Guid, CacheThread>();
-
-        private static void RemoveThread(Guid threadId)
+        /// <summary>
+        /// Get next page by cache id & page
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="id">The identifier.</param>
+        /// <param name="page">The page.</param>
+        /// <returns></returns>
+        public static PagedCacheResult<T> Next<T>(Guid id, int page) where T : new()
         {
-            Thread.Sleep(30000);
-            CacheThread thread;
-            threads.TryRemove(threadId, out thread);
+            return Next<T>(new CacheToken { Id = id, Page = page });
         }
 
-        private class CacheThread
+        private static PagedCacheResult<T> Next<T>(CacheToken tokenInfo) where T : new()
         {
-            public Guid Id { get; private set; }
+            var cacheInfo = DbContext.GetCacheInfo(tokenInfo.Id);
 
-            public CacheThread()
+            if (cacheInfo == null || DbContext.GetExpiredTime(tokenInfo.Id) < DateTime.Now)
             {
-                Id = Guid.NewGuid();
+                return new PagedCacheResult<T>(string.Empty, new List<T>());
             }
 
-            private CacheProcess process;
+            DbContext.UpdateExpiredTime(new CacheExpiredTime { Id = tokenInfo.Id, ExpiredTime = PagedCacheConfig.GetExpiredTime() });
 
-            public void Execute<T>(IDbConnection connection, int pageSize, string sqlCommandString, IDbDataParameter[] parameters, int commandTimeout) where T : new()
+            var resultData = DbContext.Get<T>(tokenInfo.Id, tokenInfo.Page);
+
+            return new PagedCacheResult<T>(Helper.EncodeToken(tokenInfo.Id, tokenInfo.Page + 1), resultData);
+        }
+    }
+
+    internal class CacheProcess
+    {
+        public Guid Id => _cacheInfo.Id;
+
+        public bool IsReady { get; set; }
+
+        private readonly CacheInfo _cacheInfo;
+
+        public CacheProcess(int pageSize) : this(Guid.NewGuid(), pageSize)
+        {
+        }
+
+        public CacheProcess(Guid id, int pageSize)
+        {
+            _cacheInfo = new CacheInfo
             {
-                process = new CacheProcess(Id);
+                Id = id,
+                PageSize = pageSize,
+            };
+        }
 
-                process.Execute<T>(connection, pageSize, sqlCommandString, parameters, commandTimeout);
-            }
+        private void CalculatePage(int totalCount)
+        {
+            _cacheInfo.TotalCount = totalCount;
 
-            public bool IsReady { get; private set; }
+            _cacheInfo.TotalPageCount = _cacheInfo.TotalCount / _cacheInfo.PageSize;
 
-            public void WaitFristPaged()
+            if (_cacheInfo.TotalCount % _cacheInfo.PageSize != 0)
             {
-                while (!process.IsReady)
-                {
-                    //Waiting...
-                }
+                _cacheInfo.TotalPageCount++;
             }
         }
 
-        private class CacheProcess
+        public void ExecuteForList<T>(IEnumerable<T> models) where T : new()
         {
-            public CacheProcess(Guid id)
+            CalculatePage(models.Count());
+
+            foreach (var paged in models.ToPaged(_cacheInfo.PageSize))
             {
-                _cacheInfo = new CacheInfo
-                {
-                    Id = id,
-                    ExpiredTime = PagedCacheConfig.GetExpiredTime(),
-                };
+                SaveToCache(paged);
             }
 
-            public bool IsReady { get; private set; }
+            Complate();
+        }
 
-            private CacheInfo _cacheInfo;
-
-            public void Execute<T>(IDbConnection connection, int pageSize, string sqlCommandString, IDbDataParameter[] parameters, int commandTimeout) where T : new()
+        public void ExecuteForSql<T>(IDbConnection connection, string sqlCommandString, IDbDataParameter[] parameters, int commandTimeout) where T : new()
+        {
+            if (connection.State != ConnectionState.Open)
             {
-                if (connection.State != ConnectionState.Open)
-                {
-                    connection.Open();
-                }
+                connection.Open();
+            }
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = $"SELECT COUNT(*) FROM ( {sqlCommandString} )";
+                command.CommandType = CommandType.Text;
+                command.CommandTimeout = commandTimeout;
 
-                using (var command = connection.CreateCommand())
+                if (parameters != null && parameters.Length > 0)
                 {
-                    command.CommandText = sqlCommandString;
-                    command.CommandType = CommandType.Text;
-                    command.CommandTimeout = commandTimeout;
-
-                    if (parameters != null && parameters.Length > 0)
+                    foreach (var parameter in parameters)
                     {
-                        foreach (var parameter in parameters)
+                        command.Parameters.Add(parameter);
+                    }
+                }
+
+                CalculatePage(Convert.ToInt32(command.ExecuteScalar()));
+            }
+
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = sqlCommandString;
+                command.CommandType = CommandType.Text;
+                command.CommandTimeout = commandTimeout;
+
+                if (parameters != null && parameters.Length > 0)
+                {
+                    foreach (var parameter in parameters)
+                    {
+                        command.Parameters.Add(parameter);
+                    }
+                }
+
+                using (var reader = command.ExecuteReader())
+                {
+                    var properties = typeof(T).GetProperties().ToList();
+
+                    var list = new List<T>();
+                    while (reader.Read())
+                    {
+                        var item = new T();
+
+                        foreach (var property in properties)
                         {
-                            command.Parameters.Add(parameter);
+                            property.SetValue(item, reader[property.Name], null);
+                        }
+
+                        if (list.Count >= _cacheInfo.PageSize)
+                        {
+                            SaveToCache(list);
+
+                            list = new List<T>();
                         }
                     }
-
-                    using (var reader = command.ExecuteReader())
-                    {
-                        SaveToCache<T>(reader, pageSize);
-                    }
-
-                    IsReady = true;
-                    _cacheInfo.IsPagedComplate = true;
-                    DbContext.AddOrUpdateCacheInfo(_cacheInfo);
-                }
-
-                RemoveThread(_cacheInfo.Id);
-            }
-
-            private void SaveToCache<T>(IDataReader reader, int pageSize) where T : new()
-            {
-                var list = new List<T>();
-
-                var properties = typeof(T).GetProperties().ToList();
-                DbContext.AddOrUpdateCacheInfo(_cacheInfo);
-
-                while (reader.Read())
-                {
-                    var item = new T();
-
-                    foreach (var property in properties)
-                    {
-                        property.SetValue(item, reader[property.Name], null);
-                    }
-
-                    if (list.Count >= pageSize)
-                    {
-                        _cacheInfo.ProcessPage++;
-
-                        DbContext.Save<T>(_cacheInfo.Id, _cacheInfo.ProcessPage, list);
-
-                        _cacheInfo.Pages.Add(new PageInfo()
-                        {
-                            PageNumber = _cacheInfo.ProcessPage,
-                            Token = Helper.EncodeToken(_cacheInfo.Id, _cacheInfo.ProcessPage)
-                        });
-
-                        DbContext.AddOrUpdateCacheInfo(_cacheInfo);
-
-                        if (_cacheInfo.ProcessPage > 1)
-                        {
-                            IsReady = true;
-                        }
-
-                        list = new List<T>();
-                    }
                 }
             }
 
-            #region static
-
-            private static MemoryStream stream = new MemoryStream();
-            private static LiteDB.LiteDatabase db = new LiteDB.LiteDatabase(stream);
-
-            public static PagedCacheResult<T> NextPage<T>(CacheToken tokenInfo) where T : new()
-            {
-                var cacheInfo = DbContext.GetCacheInfo(tokenInfo.Id);
-
-                if (cacheInfo != null || cacheInfo.ExpiredTime < DateTime.Now)
-                {
-                    return new PagedCacheResult<T>(string.Empty, new List<T>());
-                }
-
-                cacheInfo.ExpiredTime = PagedCacheConfig.GetExpiredTime();
-
-                var resultData = DbContext.Get<T>(tokenInfo.Id, tokenInfo.Page);
-
-                var resultNext = cacheInfo.Pages.FirstOrDefault(x => x.PageNumber == tokenInfo.Page + 1)?.Token ?? string.Empty;
-
-                return new PagedCacheResult<T>(resultNext, resultData);
-            }
-
-            #endregion
-
+            Complate();
         }
 
+        private void SaveToCache<T>(IEnumerable<T> models) where T : new()
+        {
+            _cacheInfo.ProcessPage++;
+
+            DbContext.Save(_cacheInfo.Id, _cacheInfo.ProcessPage, models);
+
+            DbContext.AddOrUpdateCacheInfo(_cacheInfo);
+
+            DbContext.UpdateExpiredTime(new CacheExpiredTime
+            {
+                Id = _cacheInfo.Id,
+                ExpiredTime = PagedCacheConfig.GetExpiredTime()
+            });
+
+            if (_cacheInfo.ProcessPage > 1)
+            {
+                IsReady = true;
+            }
+        }
+
+        private void Complate()
+        {
+            IsReady = true;
+
+            _cacheInfo.IsComplate = true;
+
+            DbContext.AddOrUpdateCacheInfo(_cacheInfo);
+
+            PagedThread.Remove(_cacheInfo.Id);
+        }
+    }
+
+    internal class CacheThread
+    {
+        public Guid Id { get; }
+
+        public CacheThread()
+        {
+            Id = Guid.NewGuid();
+        }
+
+        private CacheProcess _process;
+
+        public void Execute<T>(IDbConnection connection, int pageSize, string sqlCommandString, IDbDataParameter[] parameters, int commandTimeout) where T : new()
+        {
+            _process = new CacheProcess(Id, pageSize);
+
+            _process.ExecuteForSql<T>(connection, sqlCommandString, parameters, commandTimeout);
+        }
+
+        public void WaitFristPaged()
+        {
+            while (!_process.IsReady)
+            {
+                //Waiting...
+            }
+        }
     }
 
     #region model
@@ -215,21 +286,25 @@ namespace PagedCache
         public int Page { get; set; }
     }
 
-    internal class PageInfo
+    internal class CacheExpiredTime
     {
-        public int PageNumber { get; set; }
-        public string Token { get; set; }
+        public Guid Id { get; set; }
+        public DateTime ExpiredTime { get; set; }
     }
 
     internal class CacheInfo
     {
         public Guid Id { get; set; }
 
-        public DateTime ExpiredTime { get; set; }
-        public bool IsPagedComplate { get; internal set; }
-        public int ProcessPage { get; internal set; }
+        public bool IsComplate { get; set; }
 
-        public List<PageInfo> Pages { get; internal set; }
+        public int ProcessPage { get; set; }
+
+        public int TotalPageCount { get; set; }
+
+        public int TotalCount { get; set; }
+
+        public int PageSize { get; set; }
     }
 
     #endregion

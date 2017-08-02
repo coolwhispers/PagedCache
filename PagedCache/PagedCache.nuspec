@@ -1,0 +1,18 @@
+﻿<?xml version="1.0"?>
+<package >
+  <metadata>
+    <id>$id$</id>
+    <version>$version$</version>
+    <title>$title$</title>
+    <authors>U+</authors>
+    <owners>$author$</owners>
+    <licenseUrl>https://github.com/coolwhispers/PagedCache/blob/master/LICENSE</licenseUrl>
+    <projectUrl>https://github.com/coolwhispers/PagedCache</projectUrl>
+    <iconUrl>https://www.nuget.org/Content/Images/packageDefaultIcon-50x50.png</iconUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>Use memory cache your page.</description>
+    <releaseNotes>none</releaseNotes>
+    <copyright>$copyright</copyright>
+    <tags>paging pager page</tags>
+  </metadata>
+</package>

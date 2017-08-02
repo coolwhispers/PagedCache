@@ -1,0 +1,1 @@
+NuGet.exe pack SimpleWebApiClient\SimpleWebApiClient.csproj -Prop Configuration=Release
