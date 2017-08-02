@@ -7,7 +7,18 @@ Nuget package:
 Install-Package 
 ```
 
-Sample:
+Model Sample:
+```cs
+using PagedCache;
+
+var models = new List<ResultModel>();
+
+// model paging
+var result = models.ExecuteCache<ResultModel>(pageSize);
+
+```
+
+Sql Sample:
 ```cs
 using PagedCache;
 
@@ -24,6 +35,11 @@ var pageSize = 10;
 // sql paging
 var result = connection.ExecuteCache<ResultModel>(pageSize, sqlCommandStirng, parameters.ToArray());
 
+```
+
+Next Page Sample:
+```cs
+
 foreach(ResultModel item in result.Data)
 {
     //...
@@ -36,5 +52,4 @@ if(string.IsNullOrEmtpy(result.Next))
 {
     //no data
 }
-
 ```
