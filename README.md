@@ -14,7 +14,7 @@ using PagedCache;
 var models = new List<ResultModel>();
 
 // model paging
-var result = models.ExecuteCache<ResultModel>(pageSize);
+var result = models.ExecuteCache(pageSize);
 
 ```
 
