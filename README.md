@@ -53,3 +53,11 @@ if(string.IsNullOrEmtpy(result.Next))
     //no data
 }
 ```
+
+Or use cache id
+```cs
+var cacheId = PagedCache.GetCacheId(result.Next);
+
+//get page 2
+result = PagedCache.Next<ResultModel>(cacheId, 2);
+```
