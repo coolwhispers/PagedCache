@@ -88,16 +88,12 @@ namespace PagedCache
                     Db.DropCollection(tableName);
                 }
             }
+            
+            var pageInfoCollection = Db.GetCollection<CacheInfo>(PageInfoTable);
+            pageInfoCollection.Delete(x => x.Id == cacheInfo.Id);
 
-            if (Db.CollectionExists(PageInfoTable))
-            {
-                Db.DropCollection(PageInfoTable);
-            }
-
-            if (Db.CollectionExists(ExpiredTimeTable))
-            {
-                Db.DropCollection(ExpiredTimeTable);
-            }
+            var cacheExpiredTimeCollection = Db.GetCollection<CacheExpiredTime>(ExpiredTimeTable);
+            cacheExpiredTimeCollection.Delete(x => x.Id == cacheInfo.Id);
         }
         
 

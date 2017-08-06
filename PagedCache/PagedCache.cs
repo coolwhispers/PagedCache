@@ -153,7 +153,7 @@ namespace PagedCache
             }
             using (var command = connection.CreateCommand())
             {
-                command.CommandText = $"SELECT COUNT(*) FROM ( {sqlCommandString} )";
+                command.CommandText = $"SELECT COUNT(*) FROM ( {sqlCommandString} ) t";
                 command.CommandType = CommandType.Text;
                 command.CommandTimeout = commandTimeout;
 
